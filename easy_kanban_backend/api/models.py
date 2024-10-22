@@ -10,6 +10,12 @@ class Board(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     users = models.ManyToManyField(User)
 
+    def get_next_position(self):
+        if not self.lists.exists():
+            return 0
+        else:
+            return self.lists.aggregate(models.Max('position'))['position__max'] + 1
+
     def __str__(self):
         return self.title
     
@@ -19,6 +25,7 @@ class List(models.Model):
     board = models.ForeignKey(Board, related_name="lists", on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    position = models.IntegerField(default=0)
 
     def __str__(self):
         return f"({self.board.title}) {self.title}"

@@ -318,6 +318,40 @@ class ListRetrieveUpdateDestroyTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(List.objects.get().title, 'Patched List')
 
+
+class ListForwardBackwardTestCase(TestCase):
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='testuser', password='testpassword')
+        self.board = Board.objects.create(title='Test Board')
+        self.board.users.add(self.user)
+        self.list1 = List.objects.create(title='Test List 1', board=self.board, position=0)
+        self.list2 = List.objects.create(title='Test List 2', board=self.board, position=1)
+        self.list3 = List.objects.create(title='Test List 3', board=self.board, position=2)
+        
+
+class ListForward(ListForwardBackwardTestCase):
+    
+    def test_move_list_position_forward(self):
+        url = reverse('list-forward', kwargs={'board_pk': self.board.pk, 'list_pk': self.list1.pk})
+        response = self.client.patch(url, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(List.objects.get(pk=self.list1.pk).position, 1)
+        self.assertEqual(List.objects.get(pk=self.list2.pk).position, 0)
+        self.assertEqual(List.objects.get(pk=self.list3.pk).position, 2)
+
+class ListBackward(ListForwardBackwardTestCase):
+    
+    def test_move_list_position_backward(self):
+        url = reverse('list-backward', kwargs={'board_pk': self.board.pk, 'list_pk': self.list2.pk})
+        response = self.client.patch(url, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(List.objects.get(pk=self.list1.pk).position, 1)
+        self.assertEqual(List.objects.get(pk=self.list2.pk).position, 0)
+        self.assertEqual(List.objects.get(pk=self.list3.pk).position, 2)
+
+
 class TaskListCreateTestCase(TestCase):
 
     def setUp(self):

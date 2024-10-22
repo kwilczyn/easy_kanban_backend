@@ -18,7 +18,7 @@ class ListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = List
-        fields = ['id', 'title', 'tasks']
+        fields = ['id', 'title', 'tasks', 'position']
 
     def get_tasks(self, obj):
         tasks = obj.tasks.all().order_by('position')
@@ -40,7 +40,7 @@ class BoardSerializer(serializers.ModelSerializer):
     queryset=User.objects.all(),
     many=True
     )
-    lists = ListSerializer(many=True, read_only=True)
+    lists = serializers.SerializerMethodField()
 
     class Meta:
         model = Board
@@ -51,3 +51,7 @@ class BoardSerializer(serializers.ModelSerializer):
         board = Board.objects.create(**validated_data)
         board.users.set(users)
         return board
+    
+    def get_lists(self, obj):
+        lists = obj.lists.all().order_by('position')
+        return ListSerializer(lists, many=True).data

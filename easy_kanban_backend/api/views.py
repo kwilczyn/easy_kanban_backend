@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
+from django.db import transaction
 
 class BoardListCreate(generics.ListCreateAPIView):
     queryset = Board.objects.all()
@@ -20,6 +21,7 @@ class BoardRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     lookup_field = 'pk'
     lookup_url_kwarg = 'board_pk'
 
+
 # List Views
 class ListListCreate(generics.ListCreateAPIView):
     serializer_class = ListSerializer
@@ -31,7 +33,7 @@ class ListListCreate(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         board_pk = self.kwargs['board_pk']
         board = get_object_or_404(Board, pk=board_pk)
-        serializer.save(board=board)
+        serializer.save(board=board, position=board.get_next_position())
 
 class ListRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ListSerializer
@@ -41,6 +43,43 @@ class ListRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         board_pk = self.kwargs['board_pk']
         return List.objects.filter(board_id=board_pk)
+
+
+class ListForwardBackward(generics.UpdateAPIView):
+    serializer_class = ListSerializer
+    lookup_field = 'pk'
+    lookup_url_kwarg = 'list_pk'
+
+    def get_queryset(self):
+        board_pk = self.kwargs['board_pk']
+        return List.objects.filter(board_id=board_pk)
+
+class ListForward(ListForwardBackward):
+
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            targetList = serializer.instance
+            if targetList.position < (targetList.board.get_next_position()-1):
+                serializer.validated_data['position'] = targetList.position + 1
+                other_list = targetList.board.lists.exclude(pk=targetList.pk).filter(position=targetList.position + 1).first()
+                if other_list:
+                    other_list.position -= 1
+                    other_list.save()
+            serializer.save()
+
+class ListBackward(ListForwardBackward):
+    
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            targetList = serializer.instance
+            if targetList.position > 0:
+                serializer.validated_data['position'] = targetList.position - 1
+                other_list = targetList.board.lists.exclude(pk=targetList.pk).filter(position=targetList.position - 1).first()
+                if other_list:
+                    other_list.position += 1
+                    other_list.save()
+            serializer.save()
+
 
 # Task Views
 class TaskListCreate(generics.ListCreateAPIView):

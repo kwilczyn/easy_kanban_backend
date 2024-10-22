@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import BoardListCreate, BoardRetrieveUpdateDestroy, ListListCreate, ListRetrieveUpdateDestroy, TaskListCreate, TaskRetrieveUpdateDestroy, get_csrf_token    
+from .views import BoardListCreate, BoardRetrieveUpdateDestroy, ListListCreate, ListRetrieveUpdateDestroy, TaskListCreate, TaskRetrieveUpdateDestroy, get_csrf_token, ListForward, ListBackward    
 
 
 urlpatterns = [
@@ -10,6 +10,8 @@ urlpatterns = [
     
     path('board/<int:board_pk>/list/', ListListCreate.as_view(), name='list-list-create'),
     path('board/<int:board_pk>/list/<int:list_pk>/', ListRetrieveUpdateDestroy.as_view(), name='list-detail'),
+    path('board/<int:board_pk>/list/<int:list_pk>/forward/', ListForward.as_view(), name='list-forward'),
+    path('board/<int:board_pk>/list/<int:list_pk>/backward/', ListBackward.as_view(), name='list-backward'),
     
     path('board/<int:board_pk>/list/<int:list_pk>/task/', TaskListCreate.as_view(), name='task-list-create'),
     path('board/<int:board_pk>/list/<int:list_pk>/task/<int:task_pk>/', TaskRetrieveUpdateDestroy.as_view(), name='task-detail'),

@@ -41,6 +41,15 @@ class BoardModelTest(TestCase):
         self.assertEqual(Board.objects.count(), 0)
         self.assertEqual(List.objects.count(), 0)
 
+    def test_get_next_position(self):
+        self.assertEqual(self.board.get_next_position(), 0)
+        list1 = List.objects.create(title='Test List 1', board=self.board, position=0)
+        self.assertEqual(self.board.get_next_position(), 1)
+        list2 = List.objects.create(title='Test List 2', board=self.board, position=4)
+        self.assertEqual(self.board.get_next_position(), 5)
+        list2.delete()
+        self.assertEqual(self.board.get_next_position(), 1)
+
 
 class ListModelTest(TestCase):
     def setUp(self):
@@ -80,6 +89,10 @@ class ListModelTest(TestCase):
         self.assertEqual(Board.objects.count(), 1)
         self.list.delete()
         self.assertEqual(Board.objects.count(), 1)
+
+    def test_position_default_value(self):
+        list = List(title='Test List', board=self.board)
+        self.assertEqual(list.position, 0)
 
 
 class TaskModelTest(TestCase):
