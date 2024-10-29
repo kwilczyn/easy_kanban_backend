@@ -79,9 +79,11 @@ class BoardListCreateTestCase(TestCase):
         self.assertEqual(len(response.data), 2)
 
     def test_filter_boards_by_user(self):
+        another_user = User.objects.create_user(username='anotheruser', password='anotherpassword') 
         board1 = Board.objects.create(title='Board 1')
         board2 = Board.objects.create(title='Board 2')
         board1.users.add(self.user)
+        board2.users.add(another_user)
         response = self.client.get(self.url, {'users__id': self.user.pk})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
