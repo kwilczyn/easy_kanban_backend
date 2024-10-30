@@ -9,6 +9,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from django.db import transaction
 
+
 class BoardListCreate(generics.ListCreateAPIView):
     queryset = Board.objects.all()
     serializer_class = BoardBasicSerializer
@@ -128,3 +129,20 @@ class TaskRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
 def get_csrf_token(request):
     csrf_token = get_token(request)
     return JsonResponse({'csrfToken': csrf_token})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_test_data(request):
+    testUser = request.data.get('boards')[0].get('users')[0]
+    Board.objects.filter(users__id=testUser).delete()
+
+    for board in request.data.get('boards'):
+        board_instance = Board.objects.create(title=board.get('title'))
+        board_instance.users.add(testUser)
+        for list in board.get('lists'):
+            list_instance = List.objects.create(title=list.get('title'), board=board_instance, position=list.get('position'))
+            for task in list.get('tasks'):
+                Task.objects.create(title=task.get('title'), description=task.get('description'), list=list_instance, position=task.get('position'))
+
+    return JsonResponse({'message': 'Test data created successfully'})
