@@ -1,8 +1,9 @@
 from django.urls import path
-from .views import BoardListCreate, BoardRetrieveUpdateDestroy, ListListCreate, ListRetrieveUpdateDestroy, TaskListCreate, TaskRetrieveUpdateDestroy, get_csrf_token, ListForward, ListBackward, create_test_data    
+from .views import BoardListCreate, BoardRetrieveUpdateDestroy, ListListCreate, ListRetrieveUpdateDestroy, TaskListCreate, TaskRetrieveUpdateDestroy, get_csrf_token, ListForward, ListBackward, create_test_data, RegisterView    
 
 
 urlpatterns = [
+    path('register/', RegisterView.as_view(), name='auth_register'),
     path('csrf-token/', get_csrf_token, name='get-csrf-token'),
 
     path('board/', BoardListCreate.as_view(), name='board-list-create'),

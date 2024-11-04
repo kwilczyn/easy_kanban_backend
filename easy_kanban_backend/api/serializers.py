@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from api.models import Board, Task, List
+from django.contrib.auth.password_validation import validate_password
 
 class TaskSerializer(serializers.ModelSerializer):  
     class Meta:
@@ -55,3 +56,28 @@ class BoardSerializer(serializers.ModelSerializer):
     def get_lists(self, obj):
         lists = obj.lists.all().order_by('position')
         return ListSerializer(lists, many=True).data
+    
+
+class RegisterSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    password_confirm = serializers.CharField(write_only=True, required=True)
+
+    class Meta:
+        model = User
+        fields = ('username', 'password', 'password_confirm', 'email', 'first_name', 'last_name')
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({"password": "Passwords are not the same"})
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            password=validated_data['password'],
+            email=validated_data.get('email', ''),
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', '')
+        )
+        return user

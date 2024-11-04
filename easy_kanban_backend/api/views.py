@@ -8,6 +8,8 @@ from django.middleware.csrf import get_token
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from django.db import transaction
+from django.contrib.auth.models import User
+from .serializers import RegisterSerializer
 
 
 class BoardListCreate(generics.ListCreateAPIView):
@@ -146,3 +148,9 @@ def create_test_data(request):
                 Task.objects.create(title=task.get('title'), description=task.get('description'), list=list_instance, position=task.get('position'))
 
     return JsonResponse({'message': 'Test data created successfully'})
+
+
+class RegisterView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    permission_classes = (AllowAny,)
+    serializer_class = RegisterSerializer
