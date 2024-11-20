@@ -80,4 +80,10 @@ class RegisterSerializer(serializers.ModelSerializer):
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', '')
         )
+        #create Initial Board and lists
+        initialBoard = Board.objects.create(title="My Board")
+        initialBoard.users.set([user])
+        List.objects.create(title="To Do", board=initialBoard)
+        List.objects.create(title="In Progress", board=initialBoard)
+        List.objects.create(title="Done", board=initialBoard)
         return user
