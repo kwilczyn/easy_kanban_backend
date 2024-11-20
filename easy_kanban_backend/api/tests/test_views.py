@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 from django.contrib.auth.models import User
 from api.models import Board, List, Task
 from api.serializers import BoardBasicSerializer, BoardSerializer, ListSerializer, TaskSerializer, TaskPatchSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
 
 
 class GetCSRFTokenTestCase(TestCase):
@@ -23,8 +24,10 @@ class BoardListCreateTestCase(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.url = reverse('board-list-create')
         self.user = User.objects.create_user(username='testuser', password='testpassword')
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
+        self.url = reverse('board-list-create')
         self.board_data = {'title': 'Test Board', 'users': [self.user.pk]}
 
     def test_create_board(self):
@@ -72,8 +75,10 @@ class BoardListCreateTestCase(TestCase):
         self.assertEqual(Board.objects.count(), 1)
 
     def test_list_boards(self):
-        Board.objects.create(title='Board 1')
-        Board.objects.create(title='Board 2')
+        board1 = Board.objects.create(title='Board 1')
+        board2 = Board.objects.create(title='Board 2')
+        board1.users.add(self.user)
+        board2.users.add(self.user)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
@@ -84,25 +89,20 @@ class BoardListCreateTestCase(TestCase):
         board2 = Board.objects.create(title='Board 2')
         board1.users.add(self.user)
         board2.users.add(another_user)
-        response = self.client.get(self.url, {'users__id': self.user.pk})
+        response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['title'], 'Board 1')
 
     def test_filter_boards_by_title(self):
-        Board.objects.create(title='Board 1')
-        Board.objects.create(title='Board 2')
-        response = self.client.get(self.url, {'title': 'Board 1'})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['title'], 'Board 1')
-
-    def test_filter_boards_by_user_and_title(self):
+        another_user = User.objects.create_user(username='anotheruser', password='anotherpassword') 
         board1 = Board.objects.create(title='Board 1')
         board2 = Board.objects.create(title='Board 2')
+        board3 = Board.objects.create(title='Board 1')
         board1.users.add(self.user)
         board2.users.add(self.user)
-        response = self.client.get(self.url, {'users__id': self.user.pk, 'title': 'Board 1'})
+        board3.users.add(another_user)
+        response = self.client.get(self.url, {'title': 'Board 1'})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['title'], 'Board 1')
@@ -112,8 +112,13 @@ class BoardRetrieveUpdateDestroyTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(username='testuser', password='testpassword')
+        self.another_user = User.objects.create_user(username='anotheruser', password='anotherpassword')
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
         self.board = Board.objects.create(title='Test Board')
         self.board.users.add(self.user)
+        self.another_user_board = Board.objects.create(title='Another User Board')
+        self.another_user_board.users.add(self.another_user)
         self.url = reverse('board-detail', kwargs={'board_pk': self.board.pk})
         self.board_data = {'title': 'Updated Board', 'users': [self.user.pk]}
 
@@ -126,10 +131,19 @@ class BoardRetrieveUpdateDestroyTestCase(TestCase):
         response = self.client.get(reverse('board-detail', kwargs={'board_pk': 9999}))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_retrieve_someone_elses_board(self):
+        response = self.client.get(reverse('board-detail', kwargs={'board_pk': self.another_user_board.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_update_board(self):
         response = self.client.put(self.url, self.board_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Board.objects.get().title, 'Updated Board')
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, 'Updated Board')
+
+    def test_update_someone_elses_board(self):
+        response = self.client.put(reverse('board-detail', kwargs={'board_pk': self.another_user_board.pk}), self.board_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Board.objects.get(pk=self.another_user_board.pk).title, 'Another User Board')
 
     def test_update_board_not_found(self):
         response = self.client.put(reverse('board-detail', kwargs={'board_pk': 9999}), self.board_data, format='json')
@@ -138,34 +152,39 @@ class BoardRetrieveUpdateDestroyTestCase(TestCase):
     def test_update_board_with_invalid_user(self):
         response = self.client.put(self.url, {'title': 'Updated Board', 'users': [9999]}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Board.objects.get().title, 'Test Board')
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, 'Test Board')
 
     def test_update_board_with_too_long_title(self):    
         long_title = 'x' * 101
         response = self.client.put(self.url, {'title': long_title, 'users': [self.user.pk]}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Board.objects.get().title, 'Test Board')
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, 'Test Board')
 
     def test_update_board_with_max_length_title(self):
         max_length_title = 'x' * 100
         response = self.client.put(self.url, {'title': max_length_title, 'users': [self.user.pk]}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Board.objects.get().title, max_length_title)
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, max_length_title)
 
     def test_update_board_without_title(self):
         response = self.client.put(self.url, {'users': [self.user.pk]}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Board.objects.get().title, 'Test Board')
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, 'Test Board')
 
     def test_update_board_without_users(self):
         response = self.client.put(self.url, {'title': 'Updated Board'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Board.objects.get().title, 'Test Board')
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, 'Test Board')
 
     def test_delete_board(self):
         response = self.client.delete(self.url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(Board.objects.count(), 0)
+        self.assertEqual(Board.objects.count(), 1) # Only the another_user_board should remain
+
+    def test_delete_someone_elses_board(self):
+        response = self.client.delete(reverse('board-detail', kwargs={'board_pk': self.another_user_board.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Board.objects.count(), 2)
 
     def test_delete_board_not_found(self):
         response = self.client.delete(reverse('board-detail', kwargs={'board_pk': 9999}))
@@ -175,20 +194,25 @@ class BoardRetrieveUpdateDestroyTestCase(TestCase):
         List.objects.create(title='Test List', board=self.board)
         response = self.client.delete(self.url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(Board.objects.count(), 0)
+        self.assertEqual(Board.objects.count(), 1) # Only the another_user_board should remain
         self.assertEqual(List.objects.count(), 0)
 
     def test_patch_board_title(self):
         response = self.client.patch(self.url, {'title': 'Patched Board'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Board.objects.get().title, 'Patched Board')
+        self.assertEqual(Board.objects.get(pk=self.board.pk).title, 'Patched Board')
 
     def test_patch_board_users(self):
         user2 = User.objects.create_user(username='testuser2', password='testpassword')
         response = self.client.patch(self.url, {'users': [user2.pk]}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Board.objects.get().users.count(), 1)
-        self.assertEqual(Board.objects.get().users.first(), user2)
+        self.assertEqual(Board.objects.get(pk=self.board.pk).users.count(), 1)
+        self.assertEqual(Board.objects.get(pk=self.board.pk).users.first(), user2)
+
+    def test_patch_someone_elses_board(self):
+        response = self.client.patch(reverse('board-detail', kwargs={'board_pk': self.another_user_board.pk}), {'title': 'Patched Board'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Board.objects.get(pk=self.another_user_board.pk).title, 'Another User Board')
 
 
 class ListListCreateTestCase(TestCase):
@@ -196,8 +220,13 @@ class ListListCreateTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(username='testuser', password='testpassword')
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
         self.board = Board.objects.create(title='Test Board')
         self.board.users.add(self.user)
+        self.another_user = User.objects.create_user(username='anotheruser', password='anotherpassword')
+        self.another_user_board = Board.objects.create(title='Another User Board')
+        self.another_user_board.users.add(self.another_user)
         self.url = reverse('list-list-create', kwargs={'board_pk': self.board.pk})
         self.list_data = {'title': 'Test List'}
 
@@ -229,9 +258,15 @@ class ListListCreateTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(List.objects.count(), 0)
 
+    def test_create_list_on_someone_elses_board(self):
+        response = self.client.post(reverse('list-list-create', kwargs={'board_pk': self.another_user_board.pk}), self.list_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(List.objects.count(), 0)
+
     def test_list_lists(self):
         List.objects.create(title='List 1', board=self.board)
         List.objects.create(title='List 2', board=self.board)
+        List.objects.create(title='List 3', board=self.another_user_board)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
@@ -245,13 +280,27 @@ class ListListCreateTestCase(TestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['title'], 'List 1')
 
+    def test_filter_lists_by_someone_elses_board(self):
+        List.objects.create(title='List 1', board=self.board)
+        List.objects.create(title='List 2', board=self.another_user_board)
+        url = reverse('list-list-create', kwargs={'board_pk': self.another_user_board.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
 class ListRetrieveUpdateDestroyTestCase(TestCase):
 
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(username='testuser', password='testpassword')
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
         self.board = Board.objects.create(title='Test Board')
         self.board.users.add(self.user)
+        self.another_user = User.objects.create_user(username='anotheruser', password='anotherpassword')
+        self.another_user_board = Board.objects.create(title='Another User Board')
+        self.another_user_board.users.add(self.another_user)
+        self.another_user_list = List.objects.create(title='Another User List', board=self.another_user_board)
         self.list = List.objects.create(title='Test List', board=self.board)
         self.url = reverse('list-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk})
         self.list_data = {'title': 'Updated List'}
@@ -260,6 +309,10 @@ class ListRetrieveUpdateDestroyTestCase(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['title'], 'Test List')
+
+    def test_retieve_someone_elses_list(self):
+        response = self.client.get(reverse('list-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_retrieve_list_not_found(self):
         response = self.client.get(reverse('list-detail', kwargs={'board_pk': self.board.pk, 'list_pk': 9999}))
@@ -272,7 +325,12 @@ class ListRetrieveUpdateDestroyTestCase(TestCase):
     def test_update_list(self):
         response = self.client.put(self.url, self.list_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(List.objects.get().title, 'Updated List')
+        self.assertEqual(List.objects.get(pk=self.list.pk).title, 'Updated List')
+
+    def test_update_someone_elses_list(self):
+        response = self.client.put(reverse('list-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk}), self.list_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(List.objects.get(pk=self.another_user_list.pk).title, 'Another User List')
 
     def test_update_list_not_found(self):
         response = self.client.put(reverse('list-detail', kwargs={'board_pk': self.board.pk, 'list_pk': 9999}), self.list_data, format='json')
@@ -282,23 +340,28 @@ class ListRetrieveUpdateDestroyTestCase(TestCase):
         long_title = 'x' * 101
         response = self.client.put(self.url, {'title': long_title}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(List.objects.get().title, 'Test List')
+        self.assertEqual(List.objects.get(pk=self.list.pk).title, 'Test List')
 
     def test_update_list_with_max_length_title(self):
         max_length_title = 'x' * 100
         response = self.client.put(self.url, {'title': max_length_title}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(List.objects.get().title, max_length_title)
+        self.assertEqual(List.objects.get(pk=self.list.pk).title, max_length_title)
 
     def test_update_list_without_title(self):
         response = self.client.put(self.url, {}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(List.objects.get().title, 'Test List')
+        self.assertEqual(List.objects.get(pk=self.list.pk).title, 'Test List')
 
     def test_delete_list(self):
         response = self.client.delete(self.url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(List.objects.count(), 0)
+        self.assertEqual(List.objects.count(), 1) # Only the another_user_list should remain
+
+    def test_delete_someone_elses_list(self):
+        response = self.client.delete(reverse('list-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(List.objects.count(), 2)
 
     def test_delete_list_not_found(self):
         response = self.client.delete(reverse('list-detail', kwargs={'board_pk': self.board.pk, 'list_pk': 9999}))
@@ -308,7 +371,7 @@ class ListRetrieveUpdateDestroyTestCase(TestCase):
         Task.objects.create(title='Test Task', list=self.list)
         response = self.client.delete(self.url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(List.objects.count(), 0)
+        self.assertEqual(List.objects.count(), 1) # Only the another_user_list should remain
         self.assertEqual(Task.objects.count(), 0)
 
     def test_delete_list_wrong_board_pk(self):
@@ -318,7 +381,12 @@ class ListRetrieveUpdateDestroyTestCase(TestCase):
     def test_patch_list_title(self):
         response = self.client.patch(self.url, {'title': 'Patched List'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(List.objects.get().title, 'Patched List')
+        self.assertEqual(List.objects.get(pk=self.list.pk).title, 'Patched List')
+
+    def test_patch_someone_elses_list(self):
+        response = self.client.patch(reverse('list-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk}), {'title': 'Patched List'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(List.objects.get(pk=self.another_user_list.pk).title, 'Another User List')
 
 
 class ListForwardBackwardTestCase(TestCase):
@@ -326,11 +394,17 @@ class ListForwardBackwardTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(username='testuser', password='testpassword')
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
         self.board = Board.objects.create(title='Test Board')
         self.board.users.add(self.user)
         self.list1 = List.objects.create(title='Test List 1', board=self.board, position=0)
         self.list2 = List.objects.create(title='Test List 2', board=self.board, position=1)
         self.list3 = List.objects.create(title='Test List 3', board=self.board, position=2)
+        self.another_user = User.objects.create_user(username='anotheruser', password='anotherpassword')
+        self.another_user_board = Board.objects.create(title='Another User Board')
+        self.another_user_board.users.add(self.another_user)
+        self.another_user_list = List.objects.create(title='Another User List', board=self.another_user_board)
         
 
 class ListForward(ListForwardBackwardTestCase):
@@ -343,6 +417,12 @@ class ListForward(ListForwardBackwardTestCase):
         self.assertEqual(List.objects.get(pk=self.list2.pk).position, 0)
         self.assertEqual(List.objects.get(pk=self.list3.pk).position, 2)
 
+    def test_move_someone_elses_list_position_forward(self):
+        url = reverse('list-forward', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk})
+        response = self.client.patch(url, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(List.objects.get(pk=self.another_user_list.pk).position, 0)
+
 class ListBackward(ListForwardBackwardTestCase):
     
     def test_move_list_position_backward(self):
@@ -353,23 +433,45 @@ class ListBackward(ListForwardBackwardTestCase):
         self.assertEqual(List.objects.get(pk=self.list2.pk).position, 0)
         self.assertEqual(List.objects.get(pk=self.list3.pk).position, 2)
 
+    def test_move_someone_elses_list_position_backward(self):
+        url = reverse('list-backward', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk})
+        response = self.client.patch(url, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(List.objects.get(pk=self.another_user_list.pk).position, 0)
+
 
 class TaskListCreateTestCase(TestCase):
 
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(username='testuser', password='testpassword')
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
         self.board = Board.objects.create(title='Test Board')
         self.board.users.add(self.user)
         self.list = List.objects.create(title='Test List', board=self.board)
         self.url = reverse('task-list-create', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk})
         self.task_data = {'title': 'Test Task'}
+        self.another_user = User.objects.create_user(username='anotheruser', password='anotherpassword')
+        self.another_user_board = Board.objects.create(title='Another User Board')
+        self.another_user_board.users.add(self.another_user)
+        self.another_user_list = List.objects.create(title='Another User List', board=self.another_user_board)
 
     def test_create_task(self):
         response = self.client.post(self.url, self.task_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Task.objects.count(), 1)
         self.assertEqual(Task.objects.get().title, 'Test Task')
+
+    def test_create_task_on_someone_elses_board(self):
+        response = self.client.post(reverse('task-list-create', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk}), self.task_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Task.objects.count(), 0)
+
+    def test_create_task_on_someone_elses_list(self):
+        response = self.client.post(reverse('task-list-create', kwargs={'board_pk': self.board.pk, 'list_pk': self.another_user_list.pk}), self.task_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(Task.objects.count(), 0)
 
     def test_create_task_including_description(self):
         response = self.client.post(self.url, {'title': 'Test Task', 'description': 'Test Description'}, format='json')
@@ -411,6 +513,18 @@ class TaskListCreateTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
 
+    def test_list_someone_elses_tasks(self):
+        Task.objects.create(title='Task 1', list=self.list)
+        Task.objects.create(title='Task 2', list=self.another_user_list)
+        response = self.client.get(reverse('task-list-create', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_list_someone_eles_tasks_using_own_board_pk(self):
+        Task.objects.create(title='Task 1', list=self.list)
+        Task.objects.create(title='Task 2', list=self.another_user_list)
+        response = self.client.get(reverse('task-list-create', kwargs={'board_pk': self.board.pk, 'list_pk': self.another_user_list.pk}))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_filter_tasks_by_list(self):
         list2 = List.objects.create(title='Test List 2', board=self.board)
         Task.objects.create(title='Task 1', list=self.list)
@@ -437,10 +551,17 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
         self.user = User.objects.create_user(username='testuser', password='testpassword')
         self.board = Board.objects.create(title='Test Board')
         self.board.users.add(self.user)
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
         self.list = List.objects.create(title='Test List', board=self.board)
         self.task = Task.objects.create(title='Test Task', description='My example desc', list=self.list)
         self.url = reverse('task-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk, 'task_pk': self.task.pk})
         self.task_data = {'title': 'Updated Task', 'description': 'Updated desc', 'position': 1, 'list': self.list.pk}
+        self.another_user = User.objects.create_user(username='anotheruser', password='anotherpassword')
+        self.another_user_board = Board.objects.create(title='Another User Board')
+        self.another_user_board.users.add(self.another_user)
+        self.another_user_list = List.objects.create(title='Another User List', board=self.another_user_board)
+        self.another_user_task = Task.objects.create(title='Another User Task', list=self.another_user_list)
 
     def test_retrieve_task(self):
         response = self.client.get(self.url)
@@ -448,6 +569,18 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
         self.assertEqual(response.data['title'], 'Test Task')
         self.assertEqual(response.data['description'], 'My example desc')
         self.assertEqual(response.data['position'], 0)
+
+    def test_retrieve_someone_elses_task(self):
+        response = self.client.get(reverse('task-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk, 'task_pk': self.another_user_task.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_retrieve_someone_elses_task_using_own_board_pk(self):
+        response = self.client.get(reverse('task-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.another_user_list.pk, 'task_pk': self.another_user_task.pk}))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_retrieve_someone_elses_task_using_own_list_pk(self):
+        response = self.client.get(reverse('task-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk, 'task_pk': self.another_user_task.pk}))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_retrieve_task_not_found(self):
         response = self.client.get(reverse('task-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk, 'task_pk': 9999}))
@@ -464,7 +597,12 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
     def test_update_task(self):
         response = self.client.put(self.url, self.task_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Task.objects.get().title, 'Updated Task')
+        self.assertEqual(Task.objects.get(pk=self.task.pk).title, 'Updated Task')
+
+    def test_update_someone_elses_task(self):
+        response = self.client.put(reverse('task-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk, 'task_pk': self.another_user_task.pk}), self.task_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Task.objects.get(pk=self.another_user_task.pk).title, 'Another User Task')
 
     def test_update_task_not_found(self):
         response = self.client.put(reverse('task-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk, 'task_pk': 9999}), self.task_data, format='json')
@@ -476,7 +614,7 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
         invalid_data['title'] = long_title
         response = self.client.put(self.url, invalid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Task.objects.get().title, 'Test Task')
+        self.assertEqual(Task.objects.get(pk=self.task.pk).title, 'Test Task')
 
     def test_update_task_with_max_length_title(self):
         max_length_title = 'x' * 100
@@ -484,28 +622,28 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
         valid_data['title'] = max_length_title
         response = self.client.put(self.url, valid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Task.objects.get().title, max_length_title)
+        self.assertEqual(Task.objects.get(pk=self.task.pk).title, max_length_title)
 
     def test_update_task_without_title(self):
         invalid_data = self.task_data
         invalid_data.pop('title')
         response = self.client.put(self.url, invalid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Task.objects.get().title, 'Test Task')
+        self.assertEqual(Task.objects.get(pk=self.task.pk).title, 'Test Task')
 
     def test_update_task_without_list(self):
         invalid_data = self.task_data
         invalid_data.pop('list')
         response = self.client.put(self.url, invalid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Task.objects.get().list, self.list)
+        self.assertEqual(Task.objects.get(pk=self.task.pk).list, self.list)
 
     def test_update_task_with_invalid_list(self):
         invalid_data = self.task_data
         invalid_data['list'] = 9999
         response = self.client.put(self.url, invalid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Task.objects.get().list, self.list)
+        self.assertEqual(Task.objects.get(pk=self.task.pk).list, self.list)
 
     def test_update_task_with_list_without_position(self):
         updated_data = self.task_data
@@ -560,7 +698,12 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
     def test_delete_task(self):
         response = self.client.delete(self.url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(Task.objects.count(), 0)
+        self.assertEqual(Task.objects.count(), 1) # Only the another_user_task should remain
+
+    def test_delete_someone_elses_task(self):
+        response = self.client.delete(reverse('task-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk, 'task_pk': self.another_user_task.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Task.objects.count(), 2)
 
     def test_delete_task_not_found(self):
         response = self.client.delete(reverse('task-detail', kwargs={'board_pk': self.board.pk, 'list_pk': self.list.pk, 'task_pk': 9999}))
@@ -577,17 +720,22 @@ class TaskRetrieveUpdateDestroyTestCase(TestCase):
     def test_patch_task_title(self):
         response = self.client.patch(self.url, {'title': 'Patched Task'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Task.objects.get().title, 'Patched Task')
+        self.assertEqual(Task.objects.get(pk=self.task.pk).title, 'Patched Task')
+
+    def test_patch_someone_elses_task(self):
+        response = self.client.patch(reverse('task-detail', kwargs={'board_pk': self.another_user_board.pk, 'list_pk': self.another_user_list.pk, 'task_pk': self.another_user_task.pk}), {'title': 'Patched Task'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Task.objects.get(pk=self.another_user_task.pk).title, 'Another User Task')
 
     def test_patch_task_description(self):
         response = self.client.patch(self.url, {'description': 'Patched desc'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Task.objects.get().description, 'Patched desc')
+        self.assertEqual(Task.objects.get(pk=self.task.pk).description, 'Patched desc')
 
     def test_patch_task_position(self):
         response = self.client.patch(self.url, {'position': 5}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(Task.objects.get().position, 5)
+        self.assertEqual(Task.objects.get(pk=self.task.pk).position, 5)
 
     def test_patch_task_list(self):
         list2 = List.objects.create(title='Test List 2', board=self.board)

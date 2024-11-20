@@ -6,19 +6,39 @@ from .serializers import BoardBasicSerializer, BoardSerializer, ListSerializer, 
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
+from rest_framework.exceptions import PermissionDenied
 from django.db import transaction
 from django.contrib.auth.models import User
 from .serializers import RegisterSerializer
 
 
+
+class IsBoardMember(BasePermission):
+    def has_permission(self, request, view):
+        board_pk = view.kwargs.get('board_pk')
+        board = get_object_or_404(Board, pk=board_pk)
+        return request.user in board.users.all()
+
+class IsListLinkedToBoard(BasePermission):
+    def has_permission(self, request, view):
+        list_pk = view.kwargs.get('list_pk')
+        return get_object_or_404(List, pk=list_pk, board__id=view.kwargs.get('board_pk'))
+    
+
 class BoardListCreate(generics.ListCreateAPIView):
-    queryset = Board.objects.all()
+    permission_classes = [IsAuthenticated]
     serializer_class = BoardBasicSerializer
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['users__id', 'title']
+    filterset_fields = ['title']
+
+    def get_queryset(self):
+        user_id = self.request.user.id
+        return Board.objects.filter(users__id=user_id)
+
 
 class BoardRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticated, IsBoardMember]
     queryset = Board.objects.all()
     serializer_class = BoardSerializer
     lookup_field = 'pk'
@@ -27,18 +47,22 @@ class BoardRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
 
 # List Views
 class ListListCreate(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated, IsBoardMember]
     serializer_class = ListSerializer
 
     def get_queryset(self):
         board_pk = self.kwargs['board_pk']
-        return List.objects.filter(board_id=board_pk)
+        return List.objects.filter(board__id=board_pk, board__users__id=self.request.user.id)
 
     def perform_create(self, serializer):
         board_pk = self.kwargs['board_pk']
         board = get_object_or_404(Board, pk=board_pk)
+        if self.request.user not in board.users.filter(pk=self.request.user.id):
+            raise PermissionDenied()
         serializer.save(board=board, position=board.get_next_position())
 
 class ListRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticated, IsBoardMember]
     serializer_class = ListSerializer
     lookup_field = 'pk'
     lookup_url_kwarg = 'list_pk'
@@ -49,6 +73,7 @@ class ListRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
 
 
 class ListForwardBackward(generics.UpdateAPIView):
+    permission_classes = [IsAuthenticated, IsBoardMember]
     serializer_class = ListSerializer
     lookup_field = 'pk'
     lookup_url_kwarg = 'list_pk'
@@ -86,6 +111,7 @@ class ListBackward(ListForwardBackward):
 
 # Task Views
 class TaskListCreate(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated, IsBoardMember, IsListLinkedToBoard]
     serializer_class = TaskSerializer
 
     def get_queryset(self):
@@ -100,6 +126,7 @@ class TaskListCreate(generics.ListCreateAPIView):
         serializer.save(list=task_list, position=task_list.get_next_position())
 
 class TaskRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticated, IsBoardMember, IsListLinkedToBoard]
     serializer_class = TaskPatchSerializer
     lookup_field = 'pk'
     lookup_url_kwarg = 'task_pk'
@@ -134,7 +161,7 @@ def get_csrf_token(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def create_test_data(request):
     testUser = request.data.get('boards')[0].get('users')[0]
     Board.objects.filter(users__id=testUser).delete()
@@ -154,3 +181,10 @@ class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     permission_classes = (AllowAny,)
     serializer_class = RegisterSerializer
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def remove_test_users(request):
+    User.objects.filter(username__startswith='test_random_').delete()
+    return JsonResponse({'message': 'Test users started with test_random_ deleted successfully'})
