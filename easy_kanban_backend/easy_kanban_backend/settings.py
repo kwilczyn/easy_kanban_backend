@@ -25,9 +25,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = bool(getenv('IS_DEVELOPMENT', True))
+DEBUG = getenv('IS_DEVELOPMENT', 'True').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = [getenv('ALLOWED_HOSTS','localhost')]
+ALLOWED_HOSTS = getenv('ALLOWED_HOSTS','localhost').split(',')
 
 
 # Application definition
@@ -121,7 +121,13 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
-STATIC_URL = 'static/'
+
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATIC_URL = '/static/'
+
+STATICFILES_DIRS =  [
+    BASE_DIR / "static"
+]
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
@@ -136,9 +142,8 @@ REST_FRAMEWORK = {
 
 }
     
-CSRF_TRUSTED_ORIGINS = [
-    getenv('FRONTEND_URL', 'http://127.0.0.1:5173')
-]
+CSRF_TRUSTED_ORIGINS = getenv('FRONTEND_URL', 'http://127.0.0.1:5173').split(',')
+
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
